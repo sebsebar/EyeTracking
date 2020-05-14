@@ -1,0 +1,233 @@
+---
+title: "Portfolio1"
+author: "Fellowship of Bayes"
+date: "21 2 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+```{r libraries}
+library(tidyverse)
+library(lme4)
+library(caret)
+library(ModelMetrics)
+library(stringr)
+library(stringi)
+library(pastecs)
+library(WRS2)
+library(sjPlot)
+library(nlme) 
+library(ggplot2)
+```
+
+## Load data
+
+```{r load data}
+## Set working directory to the relevant one on your computer
+getwd()
+setwd('~/upgraded-lamp/Day5')
+
+Fixations <- read_csv('fixations2018_2019.csv') 
+Saccades <- read_csv('saccades2018_2019.csv')
+#read_csv2 for ; seperators
+
+# Make sure variables are of the right type
+Fixations <- Fixations %>%
+  mutate(
+    ParticipantID = as.factor(ParticipantID),
+    Year = as.factor(Year),
+    Task = as.factor(Task),
+    ParticipantGender = as.factor(ParticipantGender),
+    Item = as.factor(Item)
+  )
+
+Saccades <- Saccades %>%
+  mutate(
+    ParticipantID = as.factor(ParticipantID),
+    Direction = as.factor(Direction),
+    Year = as.factor(Year),
+    Task = as.factor(Task),
+    ParticipantGender = as.factor(ParticipantGender),
+    Item = as.factor(Item)
+  )
+
+```
+
+```{r VISUAL SEARCH}
+#Performance -> https://cran.r-project.org/web/packages/lme4/vignettes/lmerperf.html
+nlopt <- function(par, fn, lower, upper, control) {
+  .nloptr <<- res <- nloptr(par, fn, lb = lower, ub = upper, 
+                            opts = list(algorithm = "NLOPT_LN_BOBYQA", print_level = 1,
+                                        maxeval = 1000, xtol_abs = 1e-6, ftol_abs = 1e-6))
+  list(par = res$solution,
+       fval = res$objective,
+       conv = if (res$status > 0) 0 else res$status,
+       message = res$message)
+}
+
+
+#FIXATION in VISUAL SEARCH
+#DATA FIX
+#Subsetting for Visual Search
+names(Fixations)
+FixationSearchOnly <- filter(Fixations, Task != "SocialEngagement")
+
+#FILTERING
+FixationSearchOnly <- filter(FixationSearchOnly, Duration <= 5000)
+# looking at the data - not only the starcondition have high fixation durations, but we have two wickedly high fixation durations that we aren't interested in - 6000ms and 12000ms, so we set at cutoff at 5000ms
+
+#RESCALING
+FixationSearchOnly$StartTime1 = scale(FixationSearchOnly$StartTime) #deviding it by the sd that's what scale() does 
+
+#MODELLING
+modelDuration <- glmer(Duration ~ Task + StartTime1 +  (1 + Task | ParticipantID), data = FixationSearchOnly, family = gaussian (link = "log"))
+summary(modelDuration)
+
+#CROSS VALIDATION
+
+
+
+#SACCADES in VISUAL SEARCH
+
+#Filtering out Social Engagement
+SaccadesSearchOnly <- filter(Saccades, Task != "SocialEngagement")
+
+#FILTERING
+SaccadesSearchOnly <- filter(SaccadesSearchOnly, Duration <= 5000)
+# looking at the data - not only the starcondition have high fixation durations, but we have two wickedly high fixation durations that we aren't interested in - 6000ms and 12000ms
+#So we set at cutoff at 5000ms
+
+#RESCALING
+SaccadesSearchOnly$StartTime1 = scale(SaccadesSearchOnly$StartTime)
+SaccadesSearchOnly$Duration1 = scale(SaccadesSearchOnly$Duration)
+
+#MODELLING
+
+#Amplitude of Saccades
+model_amplitude <- glmer(Amplitude ~ Task + StartTime1 +  (1 + Task | ParticipantID), data = SaccadesSearchOnly, family = gaussian (link = "log"))
+summary(model_amplitude)
+
+#MeanVelocity of Saccades
+model_velocity <- glmer(MeanVelocity ~ Task + StartTime1 +  (1 + Task | ParticipantID), data = SaccadesSearchOnly, family = gaussian (link = "log"))
+summary(model_velocity)
+
+
+#CROSS VALIDATION
+#Unique makes sure that the same child is divided into the same fold all the time
+folds <- createFolds(unique(FixationSearchOnly$ParticipantID),k=5)
+#Set a counter
+n = 1
+RMSETrain = NULL
+RMSETest = NULL
+
+SaccadesSearchOnly$Item <- as.factor(SaccadesSearchOnly$Item)
+
+for(f in folds){
+  TrainSet = subset(SaccadesSearchOnly,!(ParticipantID %in% f))
+  TestSet = subset(SaccadesSearchOnly,(ParticipantID %in% f))
+  Model_simple <- glmer(Amplitude ~ Task + StartTime1 + (1|Item) + (1|ParticipantID) , family=gaussian(link="log"), SaccadesSearchOnly,control = glmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+  Train_predict_Q <- predict(Model_simple)
+  Test_predict_Q <- predict(Model_simple, newdata=TestSet, allow.new.levels=TRUE)
+  RMSETrain[n] = rmse(TrainSet$Amplitude,Train_predict_Q)
+  RMSETest[n] = rmse(TestSet$Amplitude,Test_predict_Q)
+  n = n+1
+}
+
+
+
+```
+
+```{r PLOTTING}
+
+##DURATION OF FIXATIONS
+Fix <- FixationSearchOnly
+Fixstar <- subset(Fix, Task = "VisualSearch_Star")
+Fixnonstar <- subset(Fix, Task != "VisualSearch_Star")
+
+##Plotting
+ggplot(Fixstar, aes(StartTime1, Duration1)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ ParticipantID)  + ggtitle("Duration across time by Participant in Star Task")
+ggplot(Fixnonstar, aes(StartTime1, Duration1)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ ParticipantID)  + ggtitle("Duration across time by Participant in counting task")
+ggplot(Fix, aes(StartTime1, Duration1)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ Task)  + ggtitle("Duration across time by SearchTask")
+#Pirate Plot of Duration of Fixations
+ggplot(FixationSearchOnly, aes(x=Task, y=Duration, color= Task)) + 
+  geom_violin() +
+  labs(title = 'Distribution of Duration of by Task', y = "Duration of Fixation")
+
+
+#SACCADES
+star <- subset(SaccadesSearchOnly, Task = "VisualSearch_Star")
+nonstar <- subset(SaccadesSearchOnly, Task != "VisualSearch_Star")
+
+##Amplitude
+ggplot(nonstar, aes(StartTime1, Amplitude)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ ParticipantID)  + ggtitle("Distribution of Amplitude of Saccades by Participant in Counting Task")
+ggplot(star, aes(StartTime1, Amplitude)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ ParticipantID)  + ggtitle("Distribution of Amplitude of Saccades by Participant in Star Task")
+ggplot(SaccadesSearchOnly, aes(StartTime1, Amplitude)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~Task) + ggtitle("Distribution of Amplitude of Saccades by Task")
+##Pirate plot
+ggplot(SaccadesSearchOnly, aes(x=Task, y=Amplitude, color= Task)) + 
+  geom_violin() +
+  labs(title = 'Distribution of Amplitudes of Saccades by Task', y = "Amplitude")
+
+#Velocity
+ggplot(nonstar, aes(StartTime1, MeanVelocity)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ ParticipantID)  + ggtitle("Distribution of Mean Velocity by Participant in Counting Task")
+ggplot(star, aes(StartTime1, MeanVelocity)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ ParticipantID)  + ggtitle("Distribution of Mean Velocity by Participant in Star Task")
+ggplot(SaccadesSearchOnly, aes(StartTime1, MeanVelocity)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~Task) + ggtitle("Distribution of Mean Velocity  by Task")
+##Pirate plot
+ggplot(SaccadesSearchOnly, aes(x=Task, y=MeanVelocity, color= Task)) + 
+  geom_violin() +
+  labs(title = 'Distribution of MeanVelocity of Saccades by Task', y = "MeanVelocity")
+
+
+```
+
+```{r SOCIAL ENGAGEMENT}
+#Social Engagement is only for 2018
+###Video = Filename of the videos (Gender (Andreas or Ivana),Dir or Div (Direct or Divergent),+o/-o(Ostensity))
+Fixations2 <- read_csv('fixations2018_2019.csv') 
+Saccades2 <- read_csv('saccades2018_2019.csv')
+logfiles <- read_csv("logfilesSE.csv")
+logfiles %>% str_split_fixed(logfiles$Video, "_", 5)
+
+merged_df <-merge(Fixations2, logfiles)
+df <- merged_df
+df<- cbind(df, `colnames<-`( do.call("rbind", sapply(df[,15], strsplit, "_")), c("Gender", "lol1", "lol2", "Directedness", "Ostensiveness")))
+library(dplyr)
+# Drop the columns of the dataframe
+df <- select(df,-c(Video,lol1,lol2))
+#Make Video descriptors into dichotemous numeric variables
+df$Gender <- (ifelse(df$Gender == "m", 1, 0))
+#Males == 1 & Females == 0
+df$Directedness <- (ifelse(df$Directedness == "dir", 1, 0))
+#Direct == 1 & Divergent == 0
+df$Ostensiveness <- (ifelse(df$Ostensiveness == "+o", 1, 0))
+#Ostensive == 1 & Non-Ostensive == 0
+
+
+#RESCALING
+df$Duration1 = scale(df$Duration)
+
+#PUPIL SIZE MODEL
+Pupil_model <- glmer(PupilSize ~  Directedness + Ostensiveness + Duration1 + (1|ParticipantID), df, family = gaussian (link = "log"))
+summary(Pupil_model)
+
+#DURATION OF FIXATIONS
+Tylen_duration <- glmer(Duration ~ Ostensiveness + Directedness  + (1|ParticipantID), df, family = gaussian (link = "log"))
+summary(Tylen_duration)
+
+
+
+#PLOTTING
+#Use data frame of summary statistics ('plotdat')
+ggplot(df, aes(StartTime, PupilSize, fill = Duration)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ParticipantID) + ggtitle("Size of Pupil over time for each particpant")
+ggplot(df, aes(StartTime, PupilSize, fill = Duration)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) + ggtitle("Size of Pupil over time for both conditions in the variable of Directedness")  + facet_wrap(~Directedness)
+ggplot(df, aes(StartTime, PupilSize, fill = Duration)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) + ggtitle("Size of Pupil over time for both conditions in the variable of Ostensiveness")  + facet_wrap(~Ostensiveness)
+
+ggplot(df, aes(StartTime, Duration)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) +  facet_wrap(~ParticipantID) + ggtitle("Distribution of Duration of fixation for different participants")
+ggplot(df, aes(StartTime, Duration)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) + ggtitle("Distribution of Duration of fixation for both conditions in the variable of Ostensiveness") + facet_wrap(~Ostensiveness)
+ggplot(df, aes(StartTime, Duration)) + geom_smooth()+ geom_point(alpha = 0.1, size = 0.2) + ggtitle("Distribution of Duration of fixation for both conditions in the variable of Directedness") + facet_wrap(~Directedness)
+
+
+
+```
